@@ -1,0 +1,115 @@
+# Day 02: Running Local AI on an AMD GPU (RX 9070 XT)
+
+
+Part 1 ran models on mini PCs (CPU only). This episode moves to a gaming PC with a real GPU. It covers why model architecture matters for VRAM, how to find smaller quants, and how speculative decoding took generation from ~32 to ~39 tokens/sec.
+
+---
+
+## Hardware
+
+| Component | Spec |
+|---|---|
+| GPU | AMD Radeon RX 9070 XT (16GB VRAM) |
+| CPU | AMD Ryzen 7 9800X3D |
+| RAM | 64GB DDR5 |
+| Software | LM Studio, Vulkan backend |
+
+No Nvidia card and no CUDA. LM Studio's Vulkan backend (llama.cpp under the hood) runs fine on AMD.
+
+---
+
+## Dense vs MoE
+
+| | Dense (Qwen3.8 27B) | MoE (Qwen 3.6 35B-A3B) |
+|---|---|---|
+| Parameters used per token | All 27B | ~3B active |
+| Needs to fit in VRAM? | Yes, or it slows down badly | Tolerates spilling into system RAM |
+| Best fit for | A GPU with enough VRAM | Big system RAM, smaller GPU |
+
+- **Dense models** read every weight for every token. If part of the model sits in system RAM, each token waits on that slower memory.
+- **Mixture-of-Experts (MoE)** models only activate a few "experts" per token. The `A3B` in the name means about 3B active parameters. Less data moves per token, so offloading to system RAM hurts much less.
+
+With 16GB of VRAM, I went with the dense 27B and picked a quant small enough to fit on the GPU.
+
+---
+
+## Finding the right quant
+
+LM Studio's **Discover** tab often shows only a few staff-pick quants (e.g. Q4_K_M, Q6_K, Q8_0), and those may not fit in 16GB.
+
+**Fix:** search for the Hugging Face repo name directly in LM Studio's search bar, or paste the full HF URL. For example:
+
+```
+unsloth/Qwen3.8-27B-GGUF
+```
+
+That shows the full list of download options (Q3_K_M, IQ4_XS, UD-Q3/Q4 variants, etc.).
+
+**Quant I used:** `Q3` (~14 GB)
+
+---
+
+## Speculative decoding (the big speedup)
+
+Speculative decoding has a fast "draft" step guess the next few tokens. The main model then checks all of them at once. When the guesses are right, you get several tokens for the price of one pass.
+
+The more draft tokens, the more guesses get thrown away when they're wrong. So more is **not** always better:
+
+| Draft tokens | Tokens/sec |
+|---|---|
+| Off (baseline) | ~32.5 |
+| 1 | ~35.5 |
+| **2** | **~37–39** ✅ |
+| 3 | ~25.8 ❌ |
+
+**Result:** 2 draft tokens gave about a 20% speedup over baseline. Setting it to 3 was actually slower than having it off.
+
+---
+
+## Bonus: giving the model web access with MCP
+
+LM Studio supports MCP servers, so a local model can search the web and fetch pages. I used DuckDuckGo search plus a fetch tool, both run through `uvx`.
+
+`mcp.json` in LM Studio (**replace with your actual config**):
+
+```json
+{
+  "mcpServers": {
+    "duckduckgo": {
+      "command": "uvx",
+      "args": ["duckduckgo-mcp-server"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  }
+}
+```
+
+Keep the tool-call confirmation prompts on. They let you see and approve what the model is doing.
+
+**Future idea:** self-host SearXNG in the homelab and point a SearXNG MCP server at it, so searches go through your own private search engine.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Only Q4_K_M / Q6_K / Q8_0 shown | Search the HF repo name directly (see above) |
+| Speed suddenly dropped (~39 → ~17 tok/s) | Fully quit and reopen LM Studio |
+| Slow even with a small quant | Check GPU offload in model settings: all layers should be on the GPU for a dense model |
+
+---
+
+## Takeaways
+
+1. AMD + Vulkan in LM Studio works.
+2. Dense models want to fit entirely in VRAM. MoE models are more forgiving.
+3. Don't settle for the default quant list. Go to the Hugging Face repo.
+4. Tune speculative decoding. The best setting isn't always the highest one.
+
+## Next: Day 03
+
+Orchestration: a big frontier model (Opus / Fable) directs smaller local models working as agents.
