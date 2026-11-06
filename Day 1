@@ -1,0 +1,70 @@
+# Day 01: Running Local AI on Mini PCs
+
+I use AI every day, but I'm not an AI engineer. This series is me learning how it works from scratch, and showing that you can run it at home with no subscription and without spending a ton on hardware.
+
+Episode 1: can a mini PC with no graphics card actually run a useful model?
+
+---
+
+## Hardware
+
+| | Dell OptiPlex 7010 Micro | ASUS NUC 15 Pro |
+|---|---|---|
+| CPU | Intel Core i5-13500T (6P + 8E cores) | Intel Core Ultra 7 255H |
+| Graphics | Basic integrated (Intel UHD) | Intel Arc 140T (integrated) |
+| RAM | 64GB DDR4 | 32GB DDR5 |
+
+> ASUS NUC 15 Pro loaned by ASUS. 
+
+---
+
+## The model: Qwen 3.6 A3B
+
+Both machines ran the same model: Qwen3.6-35B-A3B 
+
+The important part is **A3B**. This is a Mixture-of-Experts (MoE) model, and only about **3 billion** of its parameters are active for each token it generates. That's why it runs on hardware like this at all. A dense model of the same total size would be far slower.
+
+---
+
+## Results
+
+| Machine | Tokens/sec |
+|---|---|
+| Dell OptiPlex 7010 Micro | ~8 |
+| ASUS NUC 15 Pro | ~14 |
+
+Both are about as fast as most people read, which makes them usable for chatting.
+
+### Why the NUC is faster: memory bandwidth
+
+Generating each token means reading the active model weights out of RAM, so **memory bandwidth** (how fast data comes out of RAM) is the bottleneck, not CPU cores.
+
+- OptiPlex: DDR4
+- NUC: DDR5, roughly double the bandwidth on paper
+
+The real-world gap was about 1.75× (8 → 14 tok/s), close to what the bandwidth difference predicts.
+
+---
+
+## The tweaks
+
+Neither machine hit those numbers out of the box.
+
+### OptiPlex: tune CPU threads
+The OptiPlex's integrated graphics are too weak to help, so it runs on the CPU.
+- **8 threads was the sweet spot.** More threads didn't help, because the CPU is waiting on memory anyway.
+- **Vulkan barely helped,** since the iGPU is too weak.
+
+### NUC: use the GPU (Vulkan)
+The NUC's Arc 140T is a real integrated GPU.
+- **Running on Vulkan** puts the model on the Arc graphics.
+- **Adding more CPU threads made it slower.** With Vulkan, the GPU does most of the work, and extra CPU threads compete with it for the same shared memory bandwidth and power.
+
+---
+
+## Takeaways
+
+1. You don't need a graphics card to run local AI. A mini PC works.
+2. MoE models (like the A3B ones) are the cheat code for modest hardware.
+3. On mini PCs, RAM speed matters more than CPU cores.
+4. Defaults aren't optimal. Thread count and backend made a real difference.
